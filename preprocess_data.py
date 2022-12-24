@@ -1,31 +1,22 @@
 import os
 import pdb
 import argparse
+    
 
-
-
-def main(args):
-	if args.dataset == "20news":
-		unprocessed_file = os.path.join('resources', '20news_unprep.txt')
-		processed_file = os.path.join('resources', '20news_prep.txt')
-		lines = []
-		with open(unprocessed_file, 'r') as f:
-			for line in f:
-				lines.append(line)
-
-		vocab = set()
-		with open(processed_file, 'r') as f:
-			for line in f:
-				vocab.update(line.split())
-		pdb.set_trace()
-
-	else:
-		pass
 
 
 if __name__ == "__main__":
-	parser = argparse.ArgumentParser()
-	parser.add_argument("--dataset", help="Dataset name", default="20news", choices=["20news", 'wiki'])
-	args = parser.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--text_file", help="Path to input text file", required=True)
+    parser.add_argument("--vocab_file", help="Path to vocab file", default=None)
+    parser.add_argument("--output_file", help="Path to output BoW file", required=True)
+    args = parser.parse_args()
 
-	main(args)
+
+    with open(args.vocab_file, 'r') as f:
+        vocab = set([w.strip() for w in f.readlines()])
+
+
+    with open(args.text_file, 'r') as f:
+        for line in f:
+            pdb.set_trace()
