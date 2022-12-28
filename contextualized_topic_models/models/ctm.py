@@ -45,13 +45,16 @@ class CTM:
     def __init__(self, bow_size, contextual_size, inference_type="combined", n_components=10, model_type='prodLDA',
                  hidden_sizes=(100, 100), activation='softplus', dropout=0.2, learn_priors=True, batch_size=64,
                  lr=2e-3, momentum=0.99, solver='adam', num_epochs=100, reduce_on_plateau=False,
-                 num_data_loader_workers=mp.cpu_count(), label_size=0, loss_weights=None):
+                 num_data_loader_workers=mp.cpu_count(), label_size=0, loss_weights=None, device=None):
 
-        self.device = (
-                torch.device("cuda")
-                if torch.cuda.is_available()
-                else torch.device("cpu")
-            )
+        if device == None:
+            self.device = (
+                    torch.device("cuda")
+                    if torch.cuda.is_available()
+                    else torch.device("cpu")
+                )
+        else:
+            self.device = device
 
         if self.__class__.__name__ == "CTM":
             raise Exception("You cannot call this class. Use ZeroShotTM or CombinedTM")

@@ -1,6 +1,7 @@
 import os
 import random
 import argparse
+from os.path import join as pjoin
 
 import torch
 import numpy as np
@@ -59,9 +60,7 @@ def evaluate(topics, text_for_bow, embeddings_path=None):
 
 
 def main(args):
-    text_file = os.path.join('resources', '20news_unprep.txt')
-    bow_file = os.path.join('resources', '20news_prep.txt')
-    text_for_contextual, text_for_bow = load_dataset(text_file, bow_file)
+    text_for_contextual, text_for_bow = load_dataset(args.text_file, args.bow_file)
 
     qt = TopicModelDataPreparation("all-mpnet-base-v2")
 
@@ -76,7 +75,15 @@ def main(args):
 
         for seed in range(30):
             set_random_seed(seed)
-            ctm = CombinedTM(bow_size=len(qt.vocab), contextual_size=768, n_components=num_topics)
+
+            # Concatenate BoW input with embeddings in CombinedTM (https://aclanthology.org/2021.acl-short.96.pdf)
+            if args.use_bow:
+                ctm = CombinedTM(bow_size=len(qt.vocab), contextual_size=768, n_components=num_topics)
+
+            # Use only contextualized embeddings in ZeroShotTM (https://aclanthology.org/2021.eacl-main.143.pdf)
+            else:
+                ctm = ZeroShotTM(bow_size=len(qt.vocab), contextual_size=768, n_components=num_topics)
+
 
             ctm.fit(training_dataset)
             topics = [v for k, v in ctm.get_topics(10).items()]
@@ -95,7 +102,25 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--dataset", help="Dataset name", default="20news", choices=["20news", 'wiki'])
+    parser.add_argument("--text_file", help="Unprocessed text file path", default=pjoin('resources', '20news_unprep.txt'), type=str)
+    parser.add_argument("--bow_file", help="Processed bag-of-words file path", default=pjoin('resources', '20news_prep.txt'), type=str)
+
+    parser.add_argument("--model_name", help="Name for pre-trained model for generating contextualized embeddings", default="all-mpnet-base-v2", type=str)
+    parser.add_argument("--concat_bow", help="Whether to concatenate BoW representation with contextualized embeddings", action='store_true')
+    parser.add_argument("--device", help="Device for model training/inference", default=None)
+
+    # CTM hyperparameters (default to implementation from orginal paper)
+    parser.add_argument("--hidden_sizes", help="Hidden size", default=(100, 100), type=tuple)
+    parser.add_argument("--activation", help="Activation function", default='softplus', type=str, choices=['softplus', 'relu'])
+    parser.add_argument("--dropout", help="Dropout rate", default=0.2, type=float)
+    parser.add_argument("--batch_size", help="Batch size for training", default=100, type=int)
+    parser.add_argument("--lr", help="Learning rate", default=2e-3, type=float)
+    parser.add_argument("--momentum", help="Momentum for optimizer", default=0.99, type=float)
+    parser.add_argument("--num_epochs", help="Number of epochs for training", default=100, type=int)
+    
     args = parser.parse_args()
-    # parser.add_argument("--text_file", help="Dataset name", default="20news", choices=["20news", 'wiki'])
+
+    if type(args.device) == int:
+        args.device = torch.device(f'cuda:{args.device}')
+
     main(args)
