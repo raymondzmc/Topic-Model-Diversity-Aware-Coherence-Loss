@@ -6,6 +6,8 @@ from contextualized_topic_models.datasets.dataset import CTMDataset
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.preprocessing import OneHotEncoder
 
+import pdb
+
 
 def get_bag_of_words(data, min_length):
     """
@@ -18,12 +20,12 @@ def get_bag_of_words(data, min_length):
     return vect
 
 
-def bert_embeddings_from_file(text_file, sbert_model_to_load, batch_size=200, max_seq_length=None):
+def bert_embeddings_from_file(text_file, sbert_model_to_load, batch_size=200, max_seq_length=None, device='cpu'):
     """
     Creates SBERT Embeddings from an input file, assumes one document per line
     """
 
-    model = SentenceTransformer(sbert_model_to_load)
+    model = SentenceTransformer(sbert_model_to_load, device=device)
 
     if max_seq_length is not None:
         model.max_seq_length = max_seq_length
@@ -36,17 +38,15 @@ def bert_embeddings_from_file(text_file, sbert_model_to_load, batch_size=200, ma
     return np.array(model.encode(texts, show_progress_bar=True, batch_size=batch_size))
 
 
-def bert_embeddings_from_list(texts, sbert_model_to_load, batch_size=200, max_seq_length=None):
+def bert_embeddings_from_list(texts, sbert_model_to_load, batch_size=200, max_seq_length=None, device='cpu'):
     """
     Creates SBERT Embeddings from a list
     """
-    model = SentenceTransformer(sbert_model_to_load)
-
+    model = SentenceTransformer(sbert_model_to_load, device=device)
     if max_seq_length is not None:
         model.max_seq_length = max_seq_length
 
     check_max_local_length(max_seq_length, texts)
-
     return np.array(model.encode(texts, show_progress_bar=True, batch_size=batch_size))
 
 
@@ -60,7 +60,7 @@ def check_max_local_length(max_seq_length, texts):
 
 class TopicModelDataPreparation:
 
-    def __init__(self, contextualized_model=None, show_warning=True, max_seq_length=128):
+    def __init__(self, contextualized_model=None, show_warning=True, max_seq_length=128, device=None):
         self.contextualized_model = contextualized_model
         self.vocab = []
         self.id2token = {}
@@ -68,6 +68,15 @@ class TopicModelDataPreparation:
         self.label_encoder = None
         self.show_warning = show_warning
         self.max_seq_length = max_seq_length
+
+        if device == None:
+            self.device = (
+                    torch.device("cuda")
+                    if torch.cuda.is_available()
+                    else torch.device("cpu")
+                )
+        else:
+            self.device = device
 
     def load(self, contextualized_embeddings, bow_embeddings, id2token, labels=None):
         return CTMDataset(
@@ -107,10 +116,10 @@ class TopicModelDataPreparation:
 
         if custom_embeddings is None:
             train_contextualized_embeddings = bert_embeddings_from_list(
-                text_for_contextual, sbert_model_to_load=self.contextualized_model, max_seq_length=self.max_seq_length)
+                text_for_contextual, sbert_model_to_load=self.contextualized_model, max_seq_length=self.max_seq_length, device=self.device)
         else:
             train_contextualized_embeddings = custom_embeddings
-        self.vocab = self.vectorizer.get_feature_names()
+        self.vocab = self.vectorizer.get_feature_names_out()
         self.id2token = {k: v for k, v in zip(range(0, len(self.vocab)), self.vocab)}
 
         if labels:
@@ -120,7 +129,7 @@ class TopicModelDataPreparation:
             encoded_labels = None
         return CTMDataset(
             X_contextual=train_contextualized_embeddings, X_bow=train_bow_embeddings,
-            idx2token=self.id2token, labels=encoded_labels)
+            idx2token=self.id2token, labels=encoded_labels, vocab=self.vocab)
 
     def transform(self, text_for_contextual, text_for_bow=None, custom_embeddings=None, labels=None):
         """
@@ -162,7 +171,7 @@ class TopicModelDataPreparation:
 
         if custom_embeddings is None:
             test_contextualized_embeddings = bert_embeddings_from_list(
-                text_for_contextual, sbert_model_to_load=self.contextualized_model, max_seq_length=self.max_seq_length)
+                text_for_contextual, sbert_model_to_load=self.contextualized_model, max_seq_length=self.max_seq_length, device=self.device)
         else:
             test_contextualized_embeddings = custom_embeddings
 

@@ -7,7 +7,7 @@ class CTMDataset(Dataset):
 
     """Class to load BoW and the contextualized embeddings."""
 
-    def __init__(self, X_contextual, X_bow, idx2token, labels=None):
+    def __init__(self, X_contextual, X_bow, idx2token, labels=None, vocab=None):
 
         if X_bow.shape[0] != len(X_contextual):
             raise Exception("Wait! BoW and Contextual Embeddings have different sizes! "
@@ -22,6 +22,7 @@ class CTMDataset(Dataset):
         self.X_contextual = X_contextual
         self.idx2token = idx2token
         self.labels = labels
+        self.vocab = vocab
 
     def __len__(self):
         """Return length of dataset."""
@@ -29,7 +30,7 @@ class CTMDataset(Dataset):
 
     def __getitem__(self, i):
         """Return sample from dataset at index i."""
-        if type(self.X_bow[i]) == scipy.sparse.csr.csr_matrix:
+        if type(self.X_bow[i]) == scipy.sparse.csr_matrix:
             X_bow = torch.FloatTensor(self.X_bow[i].todense())
             X_contextual = torch.FloatTensor(self.X_contextual[i])
         else:
@@ -40,7 +41,7 @@ class CTMDataset(Dataset):
 
         if self.labels is not None:
             labels = self.labels[i]
-            if type(labels) == scipy.sparse.csr.csr_matrix:
+            if type(labels) == scipy.sparse.csr_matrix:
                 return_dict["labels"] = torch.FloatTensor(labels.todense())
             else:
                 return_dict["labels"] = torch.FloatTensor(labels)

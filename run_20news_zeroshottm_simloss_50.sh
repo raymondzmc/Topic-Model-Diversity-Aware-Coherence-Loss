@@ -1,0 +1,2 @@
+python run_topic_models.py --text_file resources/20news_unprep.txt --bow_file resources/20news_prep.txt \
+	                       --device 2 --use_dist_loss --num_seeds 5 --cache_dataset --plot_word_dist --weight_lambda 50

@@ -3,7 +3,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from contextualized_topic_models.networks.inference_network import CombinedInferenceNetwork, ContextualInferenceNetwork
-
+import pdb
 
 class DecoderNetwork(nn.Module):
 
@@ -113,6 +113,7 @@ class DecoderNetwork(nn.Module):
                 self.beta_batchnorm(torch.matmul(theta, self.beta)), dim=1)
             # word_dist: batch_size x input_size
             self.topic_word_matrix = self.beta
+            
         elif self.model_type == 'LDA':
             # simplex constrain on Beta
             beta = F.softmax(self.beta_batchnorm(self.beta), dim=1)

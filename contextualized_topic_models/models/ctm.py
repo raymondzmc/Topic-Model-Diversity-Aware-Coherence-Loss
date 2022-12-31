@@ -15,6 +15,7 @@ from tqdm import tqdm
 from contextualized_topic_models.utils.early_stopping.early_stopping import EarlyStopping
 from contextualized_topic_models.networks.decoding_network import DecoderNetwork
 
+import pdb
 
 class CTM:
     """Class to train the contextualized topic model. This is the more general class that we are keeping to
@@ -45,7 +46,8 @@ class CTM:
     def __init__(self, bow_size, contextual_size, inference_type="combined", n_components=10, model_type='prodLDA',
                  hidden_sizes=(100, 100), activation='softplus', dropout=0.2, learn_priors=True, batch_size=64,
                  lr=2e-3, momentum=0.99, solver='adam', num_epochs=100, reduce_on_plateau=False,
-                 num_data_loader_workers=mp.cpu_count(), label_size=0, loss_weights=None, device=None):
+                 num_data_loader_workers=mp.cpu_count(), label_size=0, loss_weights=None, device=None,
+                 use_dist_loss=False, dist_matrix=None, vocab_mask=None):
 
         if device == None:
             self.device = (
@@ -55,6 +57,7 @@ class CTM:
                 )
         else:
             self.device = device
+        
 
         if self.__class__.__name__ == "CTM":
             raise Exception("You cannot call this class. Use ZeroShotTM or CombinedTM")
@@ -135,6 +138,12 @@ class CTM:
         # learned topics
         self.best_components = None
 
+        # embedding distance loss
+        self.use_dist_loss = use_dist_loss
+        self.vocab_mask = vocab_mask
+        if self.use_dist_loss:
+            self.dist_matrix = torch.Tensor(dist_matrix).to(self.device)
+
         # Use cuda if available
         if torch.cuda.is_available():
             self.USE_CUDA = True
@@ -142,6 +151,7 @@ class CTM:
             self.USE_CUDA = False
 
         self.model = self.model.to(self.device)
+    
 
     def _loss(self, inputs, word_dists, prior_mean, prior_variance,
               posterior_mean, posterior_variance, posterior_log_variance):
@@ -163,15 +173,27 @@ class CTM:
         # Reconstruction term
         RL = -torch.sum(inputs * torch.log(word_dists + 1e-10), dim=1)
 
-        #loss = self.weights["beta"]*KL + RL
+        # Distance loss
+        DL = None
 
-        return KL, RL
+
+        if self.use_dist_loss:
+            # Mask out OOV tokens
+            beta_mask = torch.Tensor(self.vocab_mask).to(self.device)[None, :]
+            beta_mask = (1 - beta_mask) * -99999
+            beta = self.model.beta + beta_mask
+            softmax_beta = torch.softmax(beta, dim=1)
+            DL = (torch.matmul(softmax_beta.T, softmax_beta) * self.dist_matrix).sum()
+
+        return KL, RL, DL
 
     def _train_epoch(self, loader):
         """Train epoch."""
         self.model.train()
         train_loss = 0
         samples_processed = 0
+        
+        _kl_loss, _rl_loss, _dl_loss = 0, 0, 0
 
         for batch_samples in loader:
             # batch_size x vocab_size
@@ -187,8 +209,8 @@ class CTM:
                 labels = None
 
             if self.USE_CUDA:
-                X_bow = X_bow.cuda()
-                X_contextual = X_contextual.cuda()
+                X_bow = X_bow.to(self.device)
+                X_contextual = X_contextual.to(self.device)
 
             # forward pass
             self.model.zero_grad()
@@ -196,12 +218,21 @@ class CTM:
             posterior_log_variance, word_dists, estimated_labels = self.model(X_bow, X_contextual, labels)
 
             # backward pass
-            kl_loss, rl_loss = self._loss(
+            kl_loss, rl_loss, dl_loss = self._loss(
                 X_bow, word_dists, prior_mean, prior_variance,
                 posterior_mean, posterior_variance, posterior_log_variance)
 
-            loss = self.weights["beta"]*kl_loss + rl_loss
-            loss = loss.sum()
+            _kl_loss += kl_loss.sum().item()
+            _rl_loss += rl_loss.sum().item()
+
+                
+            
+            loss = self.weights["beta"]*kl_loss.sum() + rl_loss.sum()
+
+            if self.use_dist_loss:
+                _dl_loss += dl_loss.sum().item()
+                loss += self.weights["lambda"]*dl_loss.sum()
+            # loss = loss.sum()
 
             if labels is not None:
                 target_labels = torch.argmax(labels, 1)
@@ -218,7 +249,11 @@ class CTM:
 
         train_loss /= samples_processed
 
-        return samples_processed, train_loss
+        _kl_loss /= samples_processed
+        _rl_loss /= samples_processed
+        # _dl_loss /= samples_processed
+
+        return samples_processed, train_loss, (_kl_loss, _rl_loss, _dl_loss)
 
     def fit(self, train_dataset, validation_dataset=None, save_dir=None, verbose=False, patience=5, delta=0,
             n_samples=20):
@@ -274,7 +309,7 @@ class CTM:
             self.nn_epoch = epoch
             # train epoch
             s = datetime.datetime.now()
-            sp, train_loss = self._train_epoch(train_loader)
+            sp, train_loss, all_losses = self._train_epoch(train_loader)
             samples_processed += sp
             e = datetime.datetime.now()
             pbar.update(1)
@@ -307,9 +342,10 @@ class CTM:
                 self.best_components = self.model.beta
                 if save_dir is not None:
                     self.save(save_dir)
-            pbar.set_description("Epoch: [{}/{}]\t Seen Samples: [{}/{}]\tTrain Loss: {}\tTime: {}".format(
+            pbar.set_description("Epoch: [{}/{}]\t Seen Samples: [{}/{}]\t Train Loss (KL/RL/DL): {}/{}/{}\t Time: {}".format(
                 epoch + 1, self.num_epochs, samples_processed,
-                len(train_data) * self.num_epochs, train_loss, e - s))
+                len(train_data) * self.num_epochs, 
+                round(all_losses[0], 2), round(all_losses[1], 2), round(all_losses[2], 2), e - s))
 
         pbar.close()
         self.training_doc_topic_distributions = self.get_doc_topic_distribution(train_dataset, n_samples)
@@ -333,8 +369,8 @@ class CTM:
                 labels = None
 
             if self.USE_CUDA:
-                X_bow = X_bow.cuda()
-                X_contextual = X_contextual.cuda()
+                X_bow = X_bow.to(self.device)
+                X_contextual = X_contextual.to(self.device)
 
             # forward pass
             self.model.zero_grad()
@@ -404,8 +440,8 @@ class CTM:
                         labels = None
 
                     if self.USE_CUDA:
-                        X_bow = X_bow.cuda()
-                        X_contextual = X_contextual.cuda()
+                        X_bow = X_bow.to(self.device)
+                        X_contextual = X_contextual.to(self.device)
 
                     # forward pass
                     self.model.zero_grad()
