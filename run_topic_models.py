@@ -1,18 +1,23 @@
 import os
 import random
 import argparse
+import itertools
 from os.path import join as pjoin
 
 import torch
 import numpy as np
 import gensim.downloader as api
+from gensim.models.coherencemodel import CoherenceModel
+from gensim.corpora.dictionary import Dictionary
 from sklearn.metrics.pairwise import cosine_distances
+from tqdm import tqdm
+
 
 from contextualized_topic_models.models.ctm import CombinedTM, ZeroShotTM
 from contextualized_topic_models.utils.data_preparation import TopicModelDataPreparation
 from contextualized_topic_models.utils.data_preparation import bert_embeddings_from_file
 from contextualized_topic_models.evaluation.measures import TopicDiversity, CoherenceNPMI, CoherenceCV, CoherenceWordEmbeddings, InvertedRBO
-from contextualized_topic_models.utils.visualize import save_word_dist_plot
+from contextualized_topic_models.utils.visualize import save_word_dist_plot, save_histogram
 
 import pdb
 
@@ -65,7 +70,7 @@ def evaluate(topics, texts, embeddings_path=None):
 def main(args):
     text_for_contextual, text_for_bow = load_dataset(args.text_file, args.bow_file)
     qt = TopicModelDataPreparation("all-mpnet-base-v2", device=args.device)
-
+    
     dataset_name = os.path.basename(args.text_file).split('_')[0]
     model_type = 'combined' if args.concat_bow else 'zeroshot'
 
@@ -73,38 +78,104 @@ def main(args):
         cache_file = pjoin(args.cache_path, f"{dataset_name}-{args.model_name}-{model_type}.pt")
         if os.path.isfile(cache_file):
             training_dataset = torch.load(cache_file)
+            print(f"Loaded processed dataset at \"{cache_file}\".")
         else:
             training_dataset = qt.fit(text_for_contextual=text_for_contextual, text_for_bow=text_for_bow)
+            print(f"Finished processed dataset!")
             torch.save(training_dataset, cache_file)
     else:
         training_dataset = qt.fit(text_for_contextual=text_for_contextual, text_for_bow=text_for_bow)
 
     if args.use_dist_loss:
         model_type += '-distloss'
-        wv = api.load('word2vec-google-news-300')
-        word_vectors = np.zeros((len(training_dataset.idx2token), wv.vector_size))
-        missing_indices = []
-        for idx, token in training_dataset.idx2token.items():
-            if wv.has_index_for(token):
-                word_vectors[idx] = wv.get_vector(token)
-            else:
-                missing_indices.append(idx)
         
-        # Use the mean vector for OOV tokens
-        vocab_mask = np.ones(len(word_vectors), dtype=bool)
-        vocab_mask[missing_indices] = False
-        # word_vectors[missing_mask] = word_vectors[~missing_mask].mean(axis=0)
-    
-        # Compute normalized distance matrix
-        dist_matrix = cosine_distances(word_vectors)
-        for row_idx in range(len(dist_matrix)):
-            row = dist_matrix[row_idx]
-            dist_matrix[row_idx] = (row - row.min()) / (row.max() - row.min())
+        npmi_cache_file = pjoin(args.cache_path, f"{dataset_name}_npmi_matrix.pt")
+        if os.path.isfile(npmi_cache_file):
+            npmi_matrix = torch.load(npmi_cache_file)
+            print(f"Loaded NPMI matrix at \"{npmi_cache_file}\"")
+        else:
+            print("Computing NPMI matrix...")
+            texts = [doc.split() for doc in text_for_bow]
+            vocab_size = len(training_dataset.vocab)
+            npmi_matrix = np.zeros((vocab_size, vocab_size))
+            dictionary = Dictionary()
+            dictionary.id2token = training_dataset.idx2token
+            dictionary.token2id = {v:k for k, v in training_dataset.idx2token.items()}
+            topics = [list(training_dataset.idx2token.values())]
+            npmi = CoherenceModel(topics=topics, texts=texts, dictionary=dictionary, coherence='c_npmi', topn=len(topics[0]))
+            segmented_topics = npmi.measure.seg(npmi.topics)
+            accumulator = npmi.estimate_probabilities(segmented_topics)
+            num_docs = accumulator.num_docs
+            eps = 1e-12
+            for w1, w2 in tqdm(segmented_topics[0]):
+                w1_count = accumulator[w1]
+                w2_count = accumulator[w2]
+                co_occur_count = accumulator[w1, w2]
+                
+                p_w1_w2 = co_occur_count / num_docs
+                p_w1 = (w1_count / num_docs)
+                p_w2 = (w2_count / num_docs)
+                npmi_matrix[w1, w2] = np.log((p_w1_w2 + eps) / (p_w1 * p_w2)) / -np.log(p_w1_w2  + eps)
+            torch.save(npmi_matrix, npmi_cache_file)
+
+            # input_occurrence = (training_dataset.X_bow > 0).astype(int)
+            # occurrence_matrix = input_occurrence.sum(0).T.dot(input_occurrence.sum(0))
+            # cooccurrence_matrix = input_occurrence.T.dot(input_occurrence).todense()
+            # # num_docs = 
+            # sim_ratio = (cooccurrence_matrix / 2000) / (occurrence_matrix / 2000**2)
+            # sim_ratio = np.where(sim_ratio > 0, np.log2(sim_ratio), 0)
+            # sim_ratio[sim_ratio > 0] = np.log2(sim_ratio[sim_ratio > 0])
+            # np.fill_diagonal(cooccurrence_matrix, 0)
+            # token2idx = {v:k for k, v in training_dataset.idx2token.items()}
+            # vocab_size = len(training_dataset.vocab)
+            # cooccurrence_matrix = torch.zeros(vocab_size, vocab_size)
+            # occurrence_matrix = torch.zeros(vocab_size)
+            # for doc in tqdm(text_for_bow):
+            #     word_indices = [token2idx[x] for x in doc.split()]
+            #     occurrence_matrix[word_indices] += 1
+            #     for idx1, idx2 in itertools.combinations(word_indices, 2):
+            #         cooccurrence_matrix[idx1, idx2] += 1
+            #         cooccurrence_matrix[idx2, idx1] += 1
+        
+        # pdb.set_trace()
+        # cooccurr_matrix = cooccurrence_matrix /\
+        #     torch.matmul(occurrence_matrix.unsqueeze(1), occurrence_matrix.unsqueeze(0))
+        
+        dist_cache_file = pjoin(args.cache_path, f"{dataset_name}_dist_matrix.pt")
+        if os.path.isfile(dist_cache_file):
+            dist_matrix, vocab_mask = torch.load(dist_cache_file)
+            print(f"Loaded embedding pairwise distance matrix at \"{dist_cache_file}\"")
+        else:
+            print("Computing embedding distance matrix...")
+            wv = api.load('word2vec-google-news-300')
+            word_vectors = np.zeros((len(training_dataset.idx2token), wv.vector_size))
+            missing_indices = []
+            for idx, token in training_dataset.idx2token.items():
+                if wv.has_index_for(token):
+                    word_vectors[idx] = wv.get_vector(token)
+                else:
+                    missing_indices.append(idx)
+            
+            # Use the mean vector for OOV tokens
+            vocab_mask = np.ones(len(word_vectors), dtype=bool)
+            vocab_mask[missing_indices] = False
+            # word_vectors[missing_mask] = word_vectors[~missing_mask].mean(axis=0)
+        
+            # Compute normalized distance matrix
+            dist_matrix = cosine_distances(word_vectors)
+            for row_idx, row in enumerate(dist_matrix):
+                dist_matrix[row_idx] = (row - row.min()) / (row.max() - row.min())
+            torch.save((dist_matrix, vocab_mask), dist_cache_file)
+        # dist_matrix = (dist_matrix - dist_matrix.min()) / (dist_matrix.max() - dist_matrix.min())
     else:
-        dist_matrix = None
+        vocab_mask, dist_matrix, npmi_matrix = None, None, None
+    
+    if args.contextualize_beta:
+        model_type += '-xbeta'
     
     
-    for num_topics in [25, 50, 75, 100, 150]:
+    # for num_topics in [25, 50, 75, 100, 150]:
+    for num_topics in [150]:
         npmi_scores = []
         # cv_scores = []
         we_scores = []
@@ -120,11 +191,14 @@ def main(args):
                     bow_size=len(training_dataset.idx2token),
                     contextual_size=768,
                     n_components=num_topics,
+                    num_epochs=args.num_epochs,
                     device=args.device,
                     use_dist_loss=args.use_dist_loss,
                     dist_matrix=dist_matrix,
+                    npmi_matrix=npmi_matrix,
                     vocab_mask=vocab_mask,
                     loss_weights={"lambda": args.weight_lambda, "beta": 1},
+                    contextualize_beta=args.contextualize_beta,
                 )
 
             # Use only contextualized embeddings in ZeroShotTM (https://aclanthology.org/2021.eacl-main.143.pdf)
@@ -133,11 +207,14 @@ def main(args):
                     bow_size=len(training_dataset.idx2token),
                     contextual_size=768,
                     n_components=num_topics,
+                    num_epochs=args.num_epochs,
                     device=args.device,
                     use_dist_loss=args.use_dist_loss,
                     dist_matrix=dist_matrix,
+                    npmi_matrix=npmi_matrix,
                     vocab_mask=vocab_mask,
                     loss_weights={"lambda": args.weight_lambda, "beta": 1},
+                    contextualize_beta=args.contextualize_beta,
                 )
 
             
@@ -150,17 +227,21 @@ def main(args):
             we_scores.append(scores[1])
             irbo_scores.append(scores[2])
             td_scores.append(scores[3])
+            print(scores)
 
             if args.plot_word_dist:
                 for topic_idx, beta in enumerate(ctm.model.beta):
+                    if topic_idx >= 10:
+                        break
                     save_word_dist_plot(
                         torch.softmax(beta, 0), training_dataset.vocab, 
-                        pjoin(args.results_path, f"{dataset_name}-{args.model_name}-{model_type}-{num_topics}topic-lambda{args.weight_lambda}-{topic_idx}.png"),
+                        pjoin(args.results_path, f"{dataset_name}-{args.model_name}-{model_type}-{num_topics}topic-lambda{args.weight_lambda}-{topic_idx}.jpg"),
                         top_n=100)
-        
+            # pdb.set_trace()
+                    
         # print(f"[{num_topics}-Topics] NPMI: {np.mean(npmi_scores)}, CV: {np.mean(npmi_scores)}, WE: {np.mean(we_scores)}, I-RBO: {np.mean(irbo_scores)}, TD: {np.mean(td_scores)}")
-        print(f"[{num_topics}-Topics] NPMI: {np.mean(npmi_scores)}, CV: {np.mean(npmi_scores)}, WE: {np.mean(we_scores)}, I-RBO: {np.mean(irbo_scores)}, TD: {np.mean(td_scores)}")
-
+        print(f"[{num_topics}-Topics] NPMI, WE, I-RBO, TD:")
+        print(f"{np.mean(npmi_scores)}\t{np.mean(we_scores)}\t{np.mean(irbo_scores)}\t{np.mean(td_scores)}")
 
 
 if __name__ == "__main__":
@@ -193,6 +274,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_dist_loss", help="Use embedding distance loss", action='store_true')
     parser.add_argument("--weight_lambda", help="Weight for distance loss", type=float, default=10)
     parser.add_argument("--divergence_loss", help="Use topic divergence loss", action='store_true')
+    parser.add_argument("--contextualize_beta", help="Model beta as a function of input", action='store_true')
     args = parser.parse_args()
 
     if not os.path.exists(args.cache_path):

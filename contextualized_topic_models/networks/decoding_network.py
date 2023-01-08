@@ -5,12 +5,43 @@ from torch.nn import functional as F
 from contextualized_topic_models.networks.inference_network import CombinedInferenceNetwork, ContextualInferenceNetwork
 import pdb
 
+
+class BetaNetwork(nn.Module):
+    def __init__(self, input_size, bert_size, n_components=10, hidden_size=512,
+                 activation='softplus', dropout=0.2):
+        """
+        Initialize BetaNetwork.
+
+        Args
+            input_size : int, dimension of input
+            n_components : int, number of topic components, (default 10)
+            hidden_sizes : tuple, length = n_layers, (default (100, 100))
+        """
+        super(BetaNetwork, self).__init__()
+
+        if activation == 'softplus':
+            self.activation = nn.Softplus()
+        elif activation == 'relu':
+            self.activation = nn.ReLU()
+        
+        self.hiddens = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(bert_size, hidden_size),
+                self.activation,
+                nn.Dropout(p=dropout),
+                nn.Linear(hidden_size, input_size),
+            ) for _ in range(n_components)
+        ])
+
+    def forward(self, x):
+        x = torch.cat([l(x).unsqueeze(1) for l in self.hiddens], dim=1)
+        return x
 class DecoderNetwork(nn.Module):
 
 
     def __init__(self, input_size, bert_size, infnet, n_components=10, model_type='prodLDA',
                  hidden_sizes=(100,100), activation='softplus', dropout=0.2,
-                 learn_priors=True, label_size=0):
+                 learn_priors=True, label_size=0, contextualize_beta=False):
         """
         Initialize InferenceNetwork.
 
@@ -42,6 +73,7 @@ class DecoderNetwork(nn.Module):
         self.dropout = dropout
         self.learn_priors = learn_priors
         self.topic_word_matrix = None
+        self.contextualize_beta = contextualize_beta
 
 
         if infnet == "zeroshot":
@@ -76,14 +108,17 @@ class DecoderNetwork(nn.Module):
             self.prior_variance = self.prior_variance.cuda()
         if self.learn_priors:
             self.prior_variance = nn.Parameter(self.prior_variance)
+        
+        if self.contextualize_beta:
+            self.beta_network = BetaNetwork(input_size, bert_size, n_components=n_components, hidden_size=512)
+        else:
+            self.beta = torch.Tensor(n_components, input_size)
+            if torch.cuda.is_available():
+                self.beta = self.beta.cuda()
+            self.beta = nn.Parameter(self.beta)
+            nn.init.xavier_uniform_(self.beta)
 
-        self.beta = torch.Tensor(n_components, input_size)
-        if torch.cuda.is_available():
-            self.beta = self.beta.cuda()
-        self.beta = nn.Parameter(self.beta)
-        nn.init.xavier_uniform_(self.beta)
-
-        self.beta_batchnorm = nn.BatchNorm1d(input_size, affine=False)
+            self.beta_batchnorm = nn.BatchNorm1d(input_size, affine=False)
 
         # dropout on theta
         self.drop_theta = nn.Dropout(p=self.dropout)
@@ -108,9 +143,18 @@ class DecoderNetwork(nn.Module):
 
         # prodLDA vs LDA
         if self.model_type == 'prodLDA':
-            # in: batch_size x input_size x n_components
-            word_dist = F.softmax(
-                self.beta_batchnorm(torch.matmul(theta, self.beta)), dim=1)
+
+            if self.contextualize_beta:
+                beta = self.beta_network(x_bert)
+                word_dist = F.softmax(
+                    self.beta_batchnorm(torch.bmm(theta.unsqueeze(1), beta).squeeze(1), dim=1)
+                )
+            else:
+                beta = self.beta
+                # in: batch_size x input_size x n_components
+                word_dist = F.softmax(
+                    self.beta_batchnorm(torch.matmul(theta, beta)), dim=1)
+            
             # word_dist: batch_size x input_size
             self.topic_word_matrix = self.beta
             

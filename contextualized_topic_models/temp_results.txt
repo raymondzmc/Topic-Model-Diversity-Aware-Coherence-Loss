@@ -1,0 +1,8 @@
+No Sample:
+_inputs = 1 - inputs
+_inputs_dist = torch.matmul(_inputs, self.dist_matrix) / _inputs.sum(dim=1).unsqueeze(1)            
+neg_mask = (_inputs.mean(0) - _inputs.mean(0).min()) / (_inputs.mean(0).max() - _inputs.mean(0).min())
+100 * 0.5 * (softmax_beta**2) * (neg_mask * row_wise_normalize(_inputs_dist).sum(0))
+(0.010203010580712333, 0.2708303, 0.7225689240020499, 0.24733333333333332)
+
+(0.006166176149939721, 0.26426253, 0.7398593395918824, 0.25933333333333336)

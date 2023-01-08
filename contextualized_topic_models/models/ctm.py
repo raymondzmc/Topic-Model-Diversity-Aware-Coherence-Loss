@@ -6,6 +6,7 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn.functional as F
 import wordcloud
 from scipy.special import softmax
 from torch import optim
@@ -16,6 +17,19 @@ from contextualized_topic_models.utils.early_stopping.early_stopping import Earl
 from contextualized_topic_models.networks.decoding_network import DecoderNetwork
 
 import pdb
+
+def row_wise_normalize(x, mask=None):
+    rows = []
+    for row_idx, row in enumerate(x):
+        if mask != None:
+            row_mask = mask[row_idx]
+            row = row[row_mask]
+            x[row_idx][row_mask] = (row - row.min()) / (row.max() - row.min())
+        else:
+            row_min = row.min().item()
+            row_max = row.max().item()
+            rows.append((row - row_min)/(row_max - row_min))
+    return torch.stack(rows)
 
 class CTM:
     """Class to train the contextualized topic model. This is the more general class that we are keeping to
@@ -47,7 +61,7 @@ class CTM:
                  hidden_sizes=(100, 100), activation='softplus', dropout=0.2, learn_priors=True, batch_size=64,
                  lr=2e-3, momentum=0.99, solver='adam', num_epochs=100, reduce_on_plateau=False,
                  num_data_loader_workers=mp.cpu_count(), label_size=0, loss_weights=None, device=None,
-                 use_dist_loss=False, dist_matrix=None, vocab_mask=None):
+                 use_dist_loss=False, dist_matrix=None, npmi_matrix=None, vocab_mask=None, contextualize_beta=False):
 
         if device == None:
             self.device = (
@@ -109,7 +123,7 @@ class CTM:
 
         self.model = DecoderNetwork(
             bow_size, self.contextual_size, inference_type, n_components, model_type, hidden_sizes, activation,
-            dropout, learn_priors, label_size=label_size)
+            dropout, learn_priors, label_size=label_size, contextualize_beta=contextualize_beta)
 
         self.early_stopping = None
 
@@ -143,6 +157,15 @@ class CTM:
         self.vocab_mask = vocab_mask
         if self.use_dist_loss:
             self.dist_matrix = torch.Tensor(dist_matrix).to(self.device)
+            self.npmi_matrix = torch.Tensor(npmi_matrix).to(self.device)
+            # self.log_cooccurr = torch.log(torch.Tensor(cooccurr_matrix).to(self.device) + 1)
+            # sampling_prob = 1 / (torch.log(torch.Tensor(cooccurr_matrix).to(self.device) + 1) + 1)
+            # self.prob_mask = torch.distributions.binomial.Binomial(total_count=1, probs=sampling_prob)
+            # self.cooccurr_matrix = 
+        self.batchnorm = torch.nn.BatchNorm1d(self.bow_size, affine=False).to(self.device)
+        
+        # Model beta as a function of input
+        self.contextualize_beta = contextualize_beta
 
         # Use cuda if available
         if torch.cuda.is_available():
@@ -179,15 +202,66 @@ class CTM:
 
         if self.use_dist_loss:
             # Mask out OOV tokens
-            beta_mask = torch.Tensor(self.vocab_mask).to(self.device)[None, :]
-            beta_mask = (1 - beta_mask) * -99999
-            beta = self.model.beta + beta_mask
+            # beta_mask = torch.Tensor(self.vocab_mask).to(self.device)[None, :]
+            # beta_mask = (1 - beta_mask) * -99999
+            # beta = self.model.beta + beta_mask
+            beta = self.model.beta
+            # softmax_beta = torch.softmax(beta, dim=1)
+            # pdb.set_trace()
+            # sampled_dist_matrix = self.prob_mask.sample() * self.dist_matrix
+            # pdb.set_trace()
+            # weighted_dist = row_wise_normalize(torch.matmul(softmax_beta.detach(), self.dist_matrix))
+            # weighted_cooccur = row_wise_normalize(torch.matmul(softmax_beta.detach(), torch.exp(self.log_cooccurr)))
+            # prob_mask = torch.distributions.binomial.Binomial(total_count=1, probs=weighted_cooccur)
+            # distance_loss = (prob_mask.sample() * softmax_beta) * weighted_dist
+            # weight = torch.matmul(softmax_beta, (self.prob_mask.sample() * self.dist_matrix))
+            # distance_loss = weight * softmax_beta
+            
+            # conf_loss = (softmax_beta * torch.log_softmax(beta, dim=1)).sum()
+            # conf_loss = -torch.log((1 - softmax_beta)**20).sum()
+
+            # # pdb.set_trace()
+            # diversity_loss = -torch.cdist(softmax_beta.unsqueeze(0), softmax_beta.unsqueeze(0), p=1).sum()
+            # pdb.set_trace()
+
+            # logsoftmax_beta = torch.log_softmax(beta, dim=1)
+            # target = torch.log_softmax(torch.ones_like(logsoftmax_beta), dim=1)
+            # word_divergence_loss = F.kl_div(logsoftmax_beta, target, log_target=True, reduction='none').sum()
+            # print(f"Distance Loss: {round(distance_loss.item(), 3)}, Confidence Loss: {round(conf_loss.item(), 3)}")
+            
+            # Jan 06
+            # # distance_loss = (self.prob_mask.sample() * self.dist_matrix) * torch.matmul(softmax_beta.T, softmax_beta)
+            # _inputs = 1 - inputs
+            # _inputs_dist = torch.matmul(_inputs, self.dist_matrix) / _inputs.sum(dim=1).unsqueeze(1)
+            # neg_mask = (_inputs.mean(0) - _inputs.mean(0).min()) / (_inputs.mean(0).max() - _inputs.mean(0).min())
+            # # pos_mask = 1 - neg_mask
+            # # neg_mask = torch.distributions.binomial.Binomial(total_count=1, probs=neg_mask).sample()
+            # neg_loss = 0.5 * (softmax_beta**2) * (neg_mask * row_wise_normalize(_inputs_dist).sum(0))
+            # # pos_loss = 100 * -0.5 * (softmax_beta**2) * pos_mask * (1 - row_wise_normalize(_inputs_dist).mean(0))
+            # # mean_dist = self.dist_matrix.mean(1)
+            # # nomalized_mean_dist = (mean_dist - mean_dist.min()) / (mean_dist.max() - mean_dist.min())
+            # # distance_loss = softmax_beta * nomalized_mean_dist
+
+            # Jan 07
+            
+            self.npmi_matrix.fill_diagonal_(1)
+            topk_idx = torch.topk(beta, 20, dim=1)[1]
+            topk_mask = torch.zeros_like(beta)
+            for row_idx, indices in enumerate(topk_idx):
+                topk_mask[row_idx, indices] = 1
+            beta_mask = (1 - topk_mask) * -99999
+            topk_mask = topk_mask.bool()
+            topk_softmax_beta = torch.softmax(beta + beta_mask, dim=1)
             softmax_beta = torch.softmax(beta, dim=1)
-            DL = (torch.matmul(softmax_beta.T, softmax_beta) * self.dist_matrix).sum()
+            weighted_npmi = 1 - row_wise_normalize(torch.matmul(topk_softmax_beta, self.npmi_matrix))
+            # weighted_npmi.fill_diagonal_(0)
+            npmi_loss = 100 * (softmax_beta ** 2) * weighted_npmi
+            DL = npmi_loss
+            # + conf_loss + diversity_loss
 
         return KL, RL, DL
 
-    def _train_epoch(self, loader):
+    def _train_epoch(self, loader, epoch):
         """Train epoch."""
         self.model.train()
         train_loss = 0
@@ -231,7 +305,18 @@ class CTM:
 
             if self.use_dist_loss:
                 _dl_loss += dl_loss.sum().item()
-                loss += self.weights["lambda"]*dl_loss.sum()
+                # loss += 100 * dl_loss.sum()
+                # cool_down = False
+                # warm_up = False
+                # if self.weights["lambda"] > 0.1:
+                    # self.weights["lambda"] -= 0.0999
+                warm_up_steps = 50
+                interval = self.weights["lambda"] / warm_up_steps
+                if epoch < warm_up_steps:
+                    lambda_weight = epoch * interval
+                else:
+                    lambda_weight = self.weights["lambda"]
+                loss += lambda_weight * dl_loss.sum()
             # loss = loss.sum()
 
             if labels is not None:
@@ -309,7 +394,7 @@ class CTM:
             self.nn_epoch = epoch
             # train epoch
             s = datetime.datetime.now()
-            sp, train_loss, all_losses = self._train_epoch(train_loader)
+            sp, train_loss, all_losses = self._train_epoch(train_loader, epoch=epoch)
             samples_processed += sp
             e = datetime.datetime.now()
             pbar.update(1)
@@ -348,7 +433,8 @@ class CTM:
                 round(all_losses[0], 2), round(all_losses[1], 2), round(all_losses[2], 2), e - s))
 
         pbar.close()
-        self.training_doc_topic_distributions = self.get_doc_topic_distribution(train_dataset, n_samples)
+        if False: # Don't care about this for now
+            self.training_doc_topic_distributions = self.get_doc_topic_distribution(train_dataset, n_samples)
 
     def _validation(self, loader):
         """Validation epoch."""

@@ -16,3 +16,8 @@ def save_word_dist_plot(beta, vocab, save_name, top_n=None):
     plt.xticks([])
     plt.savefig(save_name)
     plt.clf()
+
+def save_histogram(data, save_name):
+    plt.hist(data, bins=100)
+    plt.savefig(save_name)
+    plt.clf()
