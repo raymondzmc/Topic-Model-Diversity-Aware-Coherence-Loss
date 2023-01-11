@@ -6,6 +6,7 @@ from os.path import join as pjoin
 
 import torch
 import numpy as np
+import gensim
 import gensim.downloader as api
 from gensim.models.coherencemodel import CoherenceModel
 from gensim.corpora.dictionary import Dictionary
@@ -86,6 +87,7 @@ def main(args):
     else:
         training_dataset = qt.fit(text_for_contextual=text_for_contextual, text_for_bow=text_for_bow)
 
+    vocab_mask, dist_matrix, npmi_matrix, word_vectors = None, None, None, None
     if args.use_dist_loss:
         model_type += '-distloss'
         
@@ -167,15 +169,21 @@ def main(args):
                 dist_matrix[row_idx] = (row - row.min()) / (row.max() - row.min())
             torch.save((dist_matrix, vocab_mask), dist_cache_file)
         # dist_matrix = (dist_matrix - dist_matrix.min()) / (dist_matrix.max() - dist_matrix.min())
-    else:
-        vocab_mask, dist_matrix, npmi_matrix = None, None, None
+    elif args.use_glove_loss:
+        glove_path = 'contextualized_topic_models/data/glove.6B.50d.w2vformat.txt'
+        wv = gensim.models.KeyedVectors.load_word2vec_format(glove_path)
+        word_vectors = np.zeros((len(training_dataset.idx2token), wv.vector_size))
+        missing_indices = []
+        for idx, token in training_dataset.idx2token.items():
+            if wv.has_index_for(token):
+                word_vectors[idx] = wv.get_vector(token)
+            else:
+                missing_indices.append(idx)
+
     
-    if args.contextualize_beta:
-        model_type += '-xbeta'
     
-    
-    # for num_topics in [25, 50, 75, 100, 150]:
-    for num_topics in [150]:
+    for num_topics in [25, 50, 75, 100, 150]:
+    # for num_topics in [150]:
         npmi_scores = []
         # cv_scores = []
         we_scores = []
@@ -197,6 +205,8 @@ def main(args):
                     dist_matrix=dist_matrix,
                     npmi_matrix=npmi_matrix,
                     vocab_mask=vocab_mask,
+                    use_glove_loss=args.use_glove_loss,
+                    word_vectors=word_vectors,
                     loss_weights={"lambda": args.weight_lambda, "beta": 1},
                     contextualize_beta=args.contextualize_beta,
                 )
@@ -213,6 +223,8 @@ def main(args):
                     dist_matrix=dist_matrix,
                     npmi_matrix=npmi_matrix,
                     vocab_mask=vocab_mask,
+                    use_glove_loss=args.use_glove_loss,
+                    word_vectors=word_vectors,
                     loss_weights={"lambda": args.weight_lambda, "beta": 1},
                     contextualize_beta=args.contextualize_beta,
                 )
@@ -275,6 +287,7 @@ if __name__ == "__main__":
     parser.add_argument("--weight_lambda", help="Weight for distance loss", type=float, default=10)
     parser.add_argument("--divergence_loss", help="Use topic divergence loss", action='store_true')
     parser.add_argument("--contextualize_beta", help="Model beta as a function of input", action='store_true')
+    parser.add_argument("--use_glove_loss", help="Use Glove Embeddings for distance loss", action='store_true')
     args = parser.parse_args()
 
     if not os.path.exists(args.cache_path):

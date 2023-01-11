@@ -55,7 +55,7 @@ class WhiteSpacePreprocessing():
                 retained_indices.append(i)
 
         vocabulary = list(set([item for doc in preprocessed_docs for item in doc.split()]))
-
+        
         return preprocessed_docs, unpreprocessed_docs, vocabulary, retained_indices
 
 

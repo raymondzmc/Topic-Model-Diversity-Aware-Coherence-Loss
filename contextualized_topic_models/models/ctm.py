@@ -18,6 +18,21 @@ from contextualized_topic_models.networks.decoding_network import DecoderNetwork
 
 import pdb
 
+def row_wise_normalize_inplace(x, mask=None):
+    """
+    Faster than below
+    """
+    for row_idx, row in enumerate(x):
+        if mask != None:
+            row_mask = mask[row_idx]
+            row = row[row_mask]
+            x[row_idx][row_mask] = (row - row.min()) / (row.max() - row.min())
+        else:
+            row_min = row.min().item()
+            row_max = row.max().item()
+            x[row_idx] = (row - row_min)/(row_max - row_min)
+    return x
+
 def row_wise_normalize(x, mask=None):
     rows = []
     for row_idx, row in enumerate(x):
@@ -61,7 +76,8 @@ class CTM:
                  hidden_sizes=(100, 100), activation='softplus', dropout=0.2, learn_priors=True, batch_size=64,
                  lr=2e-3, momentum=0.99, solver='adam', num_epochs=100, reduce_on_plateau=False,
                  num_data_loader_workers=mp.cpu_count(), label_size=0, loss_weights=None, device=None,
-                 use_dist_loss=False, dist_matrix=None, npmi_matrix=None, vocab_mask=None, contextualize_beta=False):
+                 use_dist_loss=False, dist_matrix=None, npmi_matrix=None, vocab_mask=None, 
+                 use_glove_loss=False, word_vectors=None, contextualize_beta=False):
 
         if device == None:
             self.device = (
@@ -158,6 +174,10 @@ class CTM:
         if self.use_dist_loss:
             self.dist_matrix = torch.Tensor(dist_matrix).to(self.device)
             self.npmi_matrix = torch.Tensor(npmi_matrix).to(self.device)
+        elif use_glove_loss:
+            self.use_glove_loss = use_glove_loss
+            self.word_vectors = torch.Tensor(word_vectors).to(self.device)
+            
             # self.log_cooccurr = torch.log(torch.Tensor(cooccurr_matrix).to(self.device) + 1)
             # sampling_prob = 1 / (torch.log(torch.Tensor(cooccurr_matrix).to(self.device) + 1) + 1)
             # self.prob_mask = torch.distributions.binomial.Binomial(total_count=1, probs=sampling_prob)
@@ -243,7 +263,6 @@ class CTM:
             # # distance_loss = softmax_beta * nomalized_mean_dist
 
             # Jan 07
-            
             self.npmi_matrix.fill_diagonal_(1)
             topk_idx = torch.topk(beta, 20, dim=1)[1]
             topk_mask = torch.zeros_like(beta)
@@ -253,11 +272,24 @@ class CTM:
             topk_mask = topk_mask.bool()
             topk_softmax_beta = torch.softmax(beta + beta_mask, dim=1)
             softmax_beta = torch.softmax(beta, dim=1)
-            weighted_npmi = 1 - row_wise_normalize(torch.matmul(topk_softmax_beta, self.npmi_matrix))
+            
+            weighted_npmi = 1 - row_wise_normalize_inplace(torch.matmul(topk_softmax_beta.detach(), self.npmi_matrix))
+            # weighted_npmi = 1 - row_wise_normalize(torch.matmul(topk_softmax_beta, self.npmi_matrix))
             # weighted_npmi.fill_diagonal_(0)
             npmi_loss = 100 * (softmax_beta ** 2) * weighted_npmi
             DL = npmi_loss
             # + conf_loss + diversity_loss
+        
+        # Re-implementation of https://aclanthology.org/D18-1096.pdf
+        elif self.use_glove_loss:
+            E = F.normalize(self.word_vectors, dim=1)
+            W = F.normalize(self.model.beta.T, dim=0)
+            T = F.normalize(torch.matmul(E.T, W), dim=0)
+            S = torch.matmul(E, T)
+            # S = WTT
+            C = (S.detach() * W).unsqueeze(0)
+            DL = C.sum()
+            
 
         return KL, RL, DL
 
@@ -303,7 +335,7 @@ class CTM:
             
             loss = self.weights["beta"]*kl_loss.sum() + rl_loss.sum()
 
-            if self.use_dist_loss:
+            if self.use_dist_loss or self.use_glove_loss:
                 _dl_loss += dl_loss.sum().item()
                 # loss += 100 * dl_loss.sum()
                 # cool_down = False
