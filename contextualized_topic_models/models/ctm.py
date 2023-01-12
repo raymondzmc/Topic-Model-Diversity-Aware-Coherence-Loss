@@ -170,12 +170,12 @@ class CTM:
 
         # embedding distance loss
         self.use_dist_loss = use_dist_loss
+        self.use_glove_loss = use_glove_loss
         self.vocab_mask = vocab_mask
         if self.use_dist_loss:
             self.dist_matrix = torch.Tensor(dist_matrix).to(self.device)
             self.npmi_matrix = torch.Tensor(npmi_matrix).to(self.device)
-        elif use_glove_loss:
-            self.use_glove_loss = use_glove_loss
+        elif self.use_glove_loss:
             self.word_vectors = torch.Tensor(word_vectors).to(self.device)
             
             # self.log_cooccurr = torch.log(torch.Tensor(cooccurr_matrix).to(self.device) + 1)

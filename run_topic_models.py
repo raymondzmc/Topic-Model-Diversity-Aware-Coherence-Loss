@@ -68,6 +68,9 @@ def evaluate(topics, texts, embeddings_path=None):
 
 
 
+
+
+
 def main(args):
     text_for_contextual, text_for_bow = load_dataset(args.text_file, args.bow_file)
     qt = TopicModelDataPreparation("all-mpnet-base-v2", device=args.device)
@@ -193,6 +196,9 @@ def main(args):
         for seed in range(args.num_seeds):
             set_random_seed(seed)
 
+            # Results path for the current run
+            results_path = pjoin(args.results_path, dataset_name, model_type, f'{num_topics}topics-seed-{seed}')
+
             # Concatenate BoW input with embeddings in CombinedTM (https://aclanthology.org/2021.acl-short.96.pdf)
             if args.concat_bow:
                 ctm = CombinedTM(
@@ -232,8 +238,18 @@ def main(args):
             
 
             ctm.fit(training_dataset)
+
+            pdb.set_trace()
+
             topics = [v for k, v in ctm.get_topics(10).items()]
             scores = evaluate(topics, text_for_bow, embeddings_path=None)
+
+            model_output = {
+                'topics': topics,
+                'topic-document-matrix' ctm.get_doc_topic_distribution(training_dataset).T:
+                'topic-word-matrix': ctm.model.beta.detach().cpu().numpy(),
+            }
+
             npmi_scores.append(scores[0])
             # cv_scores.append(scores[1])
             we_scores.append(scores[1])
@@ -242,12 +258,13 @@ def main(args):
             print(scores)
 
             if args.plot_word_dist:
+                img_path = pjoin(args.results_path, 'plots')
                 for topic_idx, beta in enumerate(ctm.model.beta):
                     if topic_idx >= 10:
                         break
                     save_word_dist_plot(
                         torch.softmax(beta, 0), training_dataset.vocab, 
-                        pjoin(args.results_path, f"{dataset_name}-{args.model_name}-{model_type}-{num_topics}topic-lambda{args.weight_lambda}-{topic_idx}.jpg"),
+                        pjoin(results_path, f"{dataset_name}-{args.model_name}-{model_type}-{num_topics}topic-lambda{args.weight_lambda}-{topic_idx}.jpg"),
                         top_n=100)
             # pdb.set_trace()
                     
