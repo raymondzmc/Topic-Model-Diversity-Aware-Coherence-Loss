@@ -2,6 +2,7 @@ import gurobipy as gp
 from gurobipy import GRB
 from collections import defaultdict
 import numpy as np
+import pdb
 
 def create_basic_mip(scores, final_num_topics, warm_start_indices, 
                      MIP_gap, time_limit):
@@ -148,6 +149,7 @@ def mwbis(topics, scores, final_num_topics, epsilon, warm_start_indices=None,
                 words[word].add(i)
                 words[word].add(j)
     
+    pdb.set_trace()
     m, x_vars = create_basic_mip(scores, final_num_topics, 
                                  warm_start_indices, MIP_gap, time_limit)
 

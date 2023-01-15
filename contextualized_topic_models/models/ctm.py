@@ -76,7 +76,7 @@ class CTM:
                  hidden_sizes=(100, 100), activation='softplus', dropout=0.2, learn_priors=True, batch_size=64,
                  lr=2e-3, momentum=0.99, solver='adam', num_epochs=100, reduce_on_plateau=False,
                  num_data_loader_workers=mp.cpu_count(), label_size=0, loss_weights=None, device=None,
-                 use_dist_loss=False, dist_matrix=None, npmi_matrix=None, vocab_mask=None, 
+                 use_npmi_loss=False, npmi_matrix=None, vocab_mask=None, 
                  use_glove_loss=False, word_vectors=None, contextualize_beta=False):
 
         if device == None:
@@ -169,11 +169,10 @@ class CTM:
         self.best_components = None
 
         # embedding distance loss
-        self.use_dist_loss = use_dist_loss
+        self.use_npmi_loss = use_npmi_loss
         self.use_glove_loss = use_glove_loss
         self.vocab_mask = vocab_mask
-        if self.use_dist_loss:
-            self.dist_matrix = torch.Tensor(dist_matrix).to(self.device)
+        if self.use_npmi_loss:
             self.npmi_matrix = torch.Tensor(npmi_matrix).to(self.device)
         elif self.use_glove_loss:
             self.word_vectors = torch.Tensor(word_vectors).to(self.device)
@@ -220,7 +219,7 @@ class CTM:
         DL = None
 
 
-        if self.use_dist_loss:
+        if self.use_npmi_loss:
             # Mask out OOV tokens
             # beta_mask = torch.Tensor(self.vocab_mask).to(self.device)[None, :]
             # beta_mask = (1 - beta_mask) * -99999
@@ -282,12 +281,11 @@ class CTM:
         
         # Re-implementation of https://aclanthology.org/D18-1096.pdf
         elif self.use_glove_loss:
-            E = F.normalize(self.word_vectors, dim=1)
+            E = F.normalize(self.word_vectors, dim=1) 
             W = F.normalize(self.model.beta.T, dim=0)
             T = F.normalize(torch.matmul(E.T, W), dim=0)
             S = torch.matmul(E, T)
-            # S = WTT
-            C = (S.detach() * W).unsqueeze(0)
+            C = (S * W)
             DL = C.sum()
             
 
@@ -335,7 +333,7 @@ class CTM:
             
             loss = self.weights["beta"]*kl_loss.sum() + rl_loss.sum()
 
-            if self.use_dist_loss or self.use_glove_loss:
+            if self.use_npmi_loss:
                 _dl_loss += dl_loss.sum().item()
                 # loss += 100 * dl_loss.sum()
                 # cool_down = False
@@ -348,7 +346,12 @@ class CTM:
                     lambda_weight = epoch * interval
                 else:
                     lambda_weight = self.weights["lambda"]
+                
                 loss += lambda_weight * dl_loss.sum()
+                
+            elif self.use_glove_loss:
+                _dl_loss += dl_loss.sum().item()
+                loss += self.weights["lambda"] * dl_loss.sum()
             # loss = loss.sum()
 
             if labels is not None:
