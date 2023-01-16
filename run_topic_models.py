@@ -269,7 +269,7 @@ def main(args):
             
             fp.write(f'scores: {scores}\n')
             
-            if args.use_mdkp:
+            if args.use_mdkp and num_topics <= 75:
                 optimized_topics = composite_activations(
                     model_output['topic-word-matrix'],
                     model_output['topic-document-matrix'],
