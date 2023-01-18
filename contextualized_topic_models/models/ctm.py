@@ -76,7 +76,7 @@ class CTM:
                  hidden_sizes=(100, 100), activation='softplus', dropout=0.2, learn_priors=True, batch_size=64,
                  lr=2e-3, momentum=0.99, solver='adam', num_epochs=100, reduce_on_plateau=False,
                  num_data_loader_workers=mp.cpu_count(), label_size=0, loss_weights=None, device=None,
-                 use_npmi_loss=False, npmi_matrix=None, vocab_mask=None, 
+                 use_npmi_loss=False, npmi_matrix=None, use_diversity_loss=False, vocab_mask=None, 
                  use_glove_loss=False, word_vectors=None, contextualize_beta=False):
 
         if device == None:
@@ -170,6 +170,7 @@ class CTM:
 
         # embedding distance loss
         self.use_npmi_loss = use_npmi_loss
+        self.use_diversity_loss = use_diversity_loss
         self.use_glove_loss = use_glove_loss
         self.vocab_mask = vocab_mask
         if self.use_npmi_loss:
@@ -260,11 +261,13 @@ class CTM:
             # # mean_dist = self.dist_matrix.mean(1)
             # # nomalized_mean_dist = (mean_dist - mean_dist.min()) / (mean_dist.max() - mean_dist.min())
             # # distance_loss = softmax_beta * nomalized_mean_dist
-
+            
             # Jan 07
             self.npmi_matrix.fill_diagonal_(1)
             topk_idx = torch.topk(beta, 20, dim=1)[1]
             topk_mask = torch.zeros_like(beta)
+
+
             for row_idx, indices in enumerate(topk_idx):
                 topk_mask[row_idx, indices] = 1
             beta_mask = (1 - topk_mask) * -99999
@@ -276,7 +279,23 @@ class CTM:
             # weighted_npmi = 1 - row_wise_normalize(torch.matmul(topk_softmax_beta, self.npmi_matrix))
             # weighted_npmi.fill_diagonal_(0)
             npmi_loss = 100 * (softmax_beta ** 2) * weighted_npmi
+
+            if self.use_diversity_loss:
+                # Diversity mask: (whether each topic has appeared in other top-10)
+                # top10_idx = torch.topk(beta, 10, dim=1)[1]
+                # top10_mask = torch.zeros_like(beta)
+                # for row_idx, indices in enumerate(top10_idx):
+                #     top10_mask[row_idx, indices] = 1
+
+                diversity_mask = torch.zeros_like(beta).bool()
+                for topic_idx in range(self.n_components):
+                    other_rows_mask = torch.ones(self.n_components).bool().to(self.device)
+                    other_rows_mask[topic_idx] = False
+                    diversity_mask[topic_idx] = topk_mask[other_rows_mask].sum(0) > 0
+                npmi_loss = (self.weights['alpha'] * torch.masked_select(npmi_loss, diversity_mask)).sum() + ((1 - self.weights['alpha']) * torch.masked_select(npmi_loss, ~diversity_mask)).sum()
+                npmi_loss *= 2
             DL = npmi_loss
+            
             # + conf_loss + diversity_loss
         
         # Re-implementation of https://aclanthology.org/D18-1096.pdf

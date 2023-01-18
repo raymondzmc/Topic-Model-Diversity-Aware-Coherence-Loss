@@ -59,7 +59,10 @@ def composite_activations(beta, data, vocab, bow_corpus, K):
                                           coherence='c_npmi', processes=4, topn=coherence.topk)
     total_scores = c.get_coherence_per_topic()
     # choices = greedy(topics, total_scores, K, 0)
-    choices = mdkp(topics, total_scores, K, 0.935*K*10, range(K), MIP_gap=0.01, time_limit=1200)
+    try:
+        choices = mdkp(topics, total_scores, K, 0.935*K*10, range(K), MIP_gap=0.01, time_limit=1200)
+    except:
+        return topics[:K]
     # choices = mdkp(topics, total_scores, final_num_topics=K, epsilon=0.935*K*10,  solver=cp.GLPK_MI, solver_options={'reltol':0.02, 'max_iters':100})
     # choices2 = mwbis(topics, total_scores, final_num_topics=50, epsilon=1, solver=cp.GUROBI, solver_options={'MIPGap':0.05, 'TimeLimit':1000})
     

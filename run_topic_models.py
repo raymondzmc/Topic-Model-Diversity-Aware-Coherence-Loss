@@ -70,18 +70,27 @@ def evaluate(topics, texts, embeddings_path=None):
 
 
 def main(args):
-    text_for_contextual, text_for_bow = load_dataset(args.text_file, args.bow_file)
-    bow_corpus = [doc.split() for doc in text_for_bow]
-    qt = TopicModelDataPreparation("all-mpnet-base-v2", device=args.device)
-    
     dataset_name = os.path.basename(args.text_file).split('.')[0].split('_')[0]
     model_name = args.model_type
+
+    text_for_contextual, text_for_bow = load_dataset(args.text_file, args.bow_file)
+    bow_corpus = [doc.split() for doc in text_for_bow]
+
+    qt = TopicModelDataPreparation("all-mpnet-base-v2", device=args.device)
+    
+    
     dataset_cache_file = pjoin(args.cache_path, f"{dataset_name}-{args.input_embeddings}.pt")
     if os.path.isfile(dataset_cache_file):
         training_dataset = torch.load(dataset_cache_file)
         print(f"Loaded processed dataset at \"{dataset_cache_file}\".")
     else:
-        training_dataset = qt.fit(text_for_contextual=text_for_contextual, text_for_bow=text_for_bow)
+        # Use custom embeddings for GoogleNews
+        if dataset_name == 'GoogleNews':
+            custom_embeddings_path = 'contextualized_topic_models/data/gnews/bert_embeddings_gnews'
+            custom_embeddings = np.load(custom_embeddings_path, allow_pickle=True)
+            training_dataset = qt.fit(text_for_contextual=text_for_contextual, text_for_bow=text_for_bow, custom_embeddings=custom_embeddings)
+        else:
+            training_dataset = qt.fit(text_for_contextual=text_for_contextual, text_for_bow=text_for_bow)
         print(f"Finished processed dataset!")
         torch.save(training_dataset, dataset_cache_file)
 
@@ -167,7 +176,7 @@ def main(args):
         #     torch.save((dist_matrix, vocab_mask), dist_cache_file)
         # dist_matrix = (dist_matrix - dist_matrix.min()) / (dist_matrix.max() - dist_matrix.min())
     elif args.use_glove_loss:
-        model_name += '-gloveloss'
+        model_name += f'-gloveloss{args.weight_lambda}'
         glove_path = 'contextualized_topic_models/data/glove.6B.50d.w2vformat.txt'
         wv = gensim.models.KeyedVectors.load_word2vec_format(glove_path)
         word_vectors = np.zeros((len(training_dataset.idx2token), wv.vector_size))
@@ -177,10 +186,13 @@ def main(args):
                 word_vectors[idx] = wv.get_vector(token)
             else:
                 missing_indices.append(idx)
+    
+    if args.use_diversity_loss:
+        model_name += f'-diversityloss{args.weight_alpha}'
 
     
-    
-    for num_topics in [25, 50, 75, 100, 150]:
+    topics = [25, 50, 75, 100, 150]
+    for num_topics in topics:
         npmi_scores, we_scores, irbo_scores, td_scores = [], [], [], []
 
         # Results path for the current run
@@ -205,9 +217,10 @@ def main(args):
                     use_npmi_loss=args.use_npmi_loss,
                     npmi_matrix=npmi_matrix,
                     vocab_mask=vocab_mask,
+                    use_diversity_loss=args.use_diversity_loss,
                     use_glove_loss=args.use_glove_loss,
                     word_vectors=word_vectors,
-                    loss_weights={"lambda": args.weight_lambda, "beta": 1},
+                    loss_weights={"lambda": args.weight_lambda, "beta": 1, "alpha": args.weight_alpha},
                 )
 
             # Use only contextualized embeddings in ZeroShotTM (https://aclanthology.org/2021.eacl-main.143.pdf)
@@ -221,9 +234,10 @@ def main(args):
                     use_npmi_loss=args.use_npmi_loss,
                     npmi_matrix=npmi_matrix,
                     vocab_mask=vocab_mask,
+                    use_diversity_loss=args.use_diversity_loss,
                     use_glove_loss=args.use_glove_loss,
                     word_vectors=word_vectors,
-                    loss_weights={"lambda": args.weight_lambda, "beta": 1},
+                    loss_weights={"lambda": args.weight_lambda, "beta": 1, "alpha": args.weight_alpha},
                 )
             
             elif args.model_type == 'prodlda':
@@ -235,9 +249,10 @@ def main(args):
                     use_npmi_loss=args.use_npmi_loss,
                     npmi_matrix=npmi_matrix,
                     vocab_mask=vocab_mask,
+                    use_diversity_loss=args.use_diversity_loss,
                     use_glove_loss=args.use_glove_loss,
                     word_vectors=word_vectors,
-                    loss_weight={"lambda": args.weight_lambda, "beta": 1},
+                    loss_weight={"lambda": args.weight_lambda, "beta": 1, "alpha": args.weight_alpha},
                 )
             else:
                 raise Exception("Not implemented")
@@ -337,7 +352,9 @@ if __name__ == "__main__":
     parser.add_argument("--num_epochs", help="Number of epochs for training", default=100, type=int)
 
     parser.add_argument("--use_npmi_loss", help="Use NPMI loss", action='store_true')
-    parser.add_argument("--weight_lambda", help="Weight for distance loss", type=float, default=10)
+    parser.add_argument("--use_diversity_loss", help="Use Diversity loss", action='store_true')
+    parser.add_argument("--weight_alpha", help="Weight for diversity loss", type=float, default=0.5)
+    parser.add_argument("--weight_lambda", help="Weight for distance loss", type=float, default=100)
     parser.add_argument("--divergence_loss", help="Use topic divergence loss", action='store_true')
     parser.add_argument("--contextualize_beta", help="Model beta as a function of input", action='store_true')
     
