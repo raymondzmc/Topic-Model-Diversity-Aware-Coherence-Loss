@@ -35,7 +35,7 @@ class AVITM_model(object):
                  activation='softplus', dropout=0.2, learn_priors=True, batch_size=64, lr=2e-3, momentum=0.99,
                  solver='adam', device=None, num_epochs=100, reduce_on_plateau=False, topic_prior_mean=0.0,
                  topic_prior_variance=None, num_samples=20, num_data_loader_workers=3, verbose=False,
-                 use_npmi_loss=False, npmi_matrix=None, vocab_mask=None, 
+                 use_npmi_loss=False, npmi_matrix=None, use_diversity_loss=False, vocab_mask=None, 
                  use_glove_loss=False, word_vectors=None, loss_weight={"beta": 1}):
         """
         Initialize AVITM model.
@@ -147,6 +147,7 @@ class AVITM_model(object):
         self.model = self.model.to(self.device)
 
         self.use_npmi_loss = use_npmi_loss
+        self.use_diversity_loss = use_diversity_loss
         self.use_glove_loss = use_glove_loss
         self.vocab_mask = vocab_mask
         if self.use_npmi_loss:
@@ -154,6 +155,7 @@ class AVITM_model(object):
         elif self.use_glove_loss:
             self.word_vectors = torch.Tensor(word_vectors).to(self.device)
         self.loss_weight = loss_weight
+        
 
     def _loss(self, inputs, word_dists, prior_mean, prior_variance,
               posterior_mean, posterior_variance, posterior_log_variance):
@@ -190,6 +192,23 @@ class AVITM_model(object):
             # weighted_npmi = 1 - row_wise_normalize(torch.matmul(topk_softmax_beta, self.npmi_matrix))
             # weighted_npmi.fill_diagonal_(0)
             npmi_loss = 100 * (softmax_beta ** 2) * weighted_npmi
+
+            if self.use_diversity_loss:
+                # Diversity mask: (whether each topic has appeared in other top-10)
+                # top10_idx = torch.topk(beta, 10, dim=1)[1]
+                # top10_mask = torch.zeros_like(beta)
+                # for row_idx, indices in enumerate(top10_idx):
+                #     top10_mask[row_idx, indices] = 1
+
+                diversity_mask = torch.zeros_like(beta).bool()
+                for topic_idx in range(self.num_topics):
+                    other_rows_mask = torch.ones(self.num_topics).bool().to(self.device)
+                    other_rows_mask[topic_idx] = False
+                    diversity_mask[topic_idx] = topk_mask[other_rows_mask].sum(0) > 0
+                npmi_loss = (self.loss_weight['alpha'] * torch.masked_select(npmi_loss, diversity_mask)).sum() \
+                    + ((1 - self.loss_weight['alpha']) * torch.masked_select(npmi_loss, ~diversity_mask)).sum()
+                npmi_loss *= 2
+
             warm_up_steps = 50
             interval = self.loss_weight["lambda"] / warm_up_steps
             if self.nn_epoch < warm_up_steps:

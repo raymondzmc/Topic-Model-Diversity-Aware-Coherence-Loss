@@ -292,7 +292,8 @@ class CTM:
                     other_rows_mask = torch.ones(self.n_components).bool().to(self.device)
                     other_rows_mask[topic_idx] = False
                     diversity_mask[topic_idx] = topk_mask[other_rows_mask].sum(0) > 0
-                npmi_loss = (self.weights['alpha'] * torch.masked_select(npmi_loss, diversity_mask)).sum() + ((1 - self.weights['alpha']) * torch.masked_select(npmi_loss, ~diversity_mask)).sum()
+                npmi_loss = (self.weights['alpha'] * torch.masked_select(npmi_loss, diversity_mask)).sum() +\
+                     ((1 - self.weights['alpha']) * torch.masked_select(npmi_loss, ~diversity_mask)).sum()
                 npmi_loss *= 2
             DL = npmi_loss
             
