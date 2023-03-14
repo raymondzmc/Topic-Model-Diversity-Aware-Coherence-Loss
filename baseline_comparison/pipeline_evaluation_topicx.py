@@ -1,6 +1,9 @@
 
 
-#python3 pipeline_evaluation_topicx.py --name_dataset '20news'  --number_of_topic_models 10 --list_number_of_topics "25,50,75,100,150" 
+#python3 pipeline_evaluation_topicx.py --name_dataset '20news'  --number_of_topic_models 10 --list_number_of_topics "25,50,75,100,150" > 20news.txt
+#python3 pipeline_evaluation_topicx.py --name_dataset 'dbpedia'  --number_of_topic_models 10 --list_number_of_topics "25,50,75,100,150" > dbpedia.txt
+#python3 pipeline_evaluation_topicx.py --name_dataset 'google_news'  --number_of_topic_models 10 --list_number_of_topics "25,50,75,100,150" > google_news.txt
+
 
 # %%
 import sys
@@ -95,7 +98,7 @@ for current_number_of_topics in list_number_of_topics:
             formatted_topics_list.append(list_current_topic)
 
         npmi_score, we_score, irbo_score, td_score = baseline_utils.evaluate(formatted_topics_list, texts, embeddings_path=word2vec_path)
-        dict_results = {'npmi_score': npmi_score, 'we_score': we_score, 'irbo_score': irbo_score, 'td_score': td_score}
+        dict_results = {'npmi_score': npmi_score, 'we_score': we_score, 'irbo_score': irbo_score, 'td_score': td_score, 'num_topics': current_number_of_topics}
         print(dict_results)
         final_results.append(dict_results)
 
