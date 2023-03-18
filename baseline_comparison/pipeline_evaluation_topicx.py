@@ -65,6 +65,8 @@ from datetime import datetime
 start_time = datetime.now()
 
 final_results = []
+
+dim_size=5
 for current_number_of_topics in list_number_of_topics:
     for i in range(number_topic_models):
         random_seed_number = random.randint(0, 1000)
@@ -74,13 +76,13 @@ for current_number_of_topics in list_number_of_topics:
         tm = CETopicTM(dataset=dataset, 
                     topic_model='cetopic', 
                     num_topics=current_number_of_topics, 
-                    dim_size=50,#In the paper the authors say 'we reduce the dimensionality of sentence embedding to 50 usign UMAP' #default 5 
+                    dim_size=dim_size,
                     word_select_method='tfidf_idfi', #best word selection method according to their paper
                     embedding='/mnt/datasets/SBERT/'+sbert_model_name,
                     seed=random_seed_number)  #sentence-transformers/all-mpnet-base-v2', #embedding='princeton-nlp/unsup-simcse-bert-base-uncased',  #Default in Raymond's evaluation is: all-mpnet-base-v2 #TODO: I think we must use a different embedding)
         
-        tm.train()
-
+        print('Dim_size',dim_size)
+        tm.train()    
         #td_score, cv_score, npmi_score = tm.evaluate()
         #print(f'td: {td_score} npmi: {npmi_score} cv: {cv_score}')
 
