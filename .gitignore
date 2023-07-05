@@ -109,6 +109,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.ctm
 
 # Spyder project settings
 .spyderproject
@@ -132,3 +133,7 @@ dmypy.json
 # Pytorch
 *.pt
 *.pth
+contextualized_topic_models/data/glove.6B.50d.txt.zip
+contextualized_topic_models/data/glove.6B.50d.w2vformat.txt
+contextualized_topic_models/data/glove.6B.50d.txt
+dbpedia_sample_abstract_20k_unprep.txt

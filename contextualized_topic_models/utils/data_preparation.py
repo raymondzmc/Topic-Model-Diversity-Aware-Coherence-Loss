@@ -7,7 +7,7 @@ from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.preprocessing import OneHotEncoder
 
 import pdb
-
+import torch #new
 
 def get_bag_of_words(data, min_length):
     """
